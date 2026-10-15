@@ -1,0 +1,83 @@
+# ============================================================
+# CD Pipeline: Auto Release Docker Image on Git Tag (v*.*.*)
+# Bài 2 - Session 12: Tự động hóa đóng gói & phát hành Docker
+# ============================================================
+# Mô tả:
+#   Workflow này tự động build và push Docker Image lên GHCR
+#   (GitHub Container Registry) mỗi khi một Git Tag có định
+#   dạng v*.*.* được đẩy lên repository.
+#
+# Luồng:
+#   git tag v1.0.0 → git push origin v1.0.0
+#     → Workflow kích hoạt
+#     → Login GHCR
+#     → Extract metadata (tag, label)
+#     → Build & Push → ghcr.io/<owner>/<repo>:v1.0.0
+# ============================================================
+
+name: CD - Release Docker Image
+
+# -------------------------------------------------------
+# Trigger: Chỉ kích hoạt khi push Tag khớp v*.*.*
+# -------------------------------------------------------
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Cấp quyền để ghi vào GitHub Packages (GHCR)
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release-image:
+    name: Build & Push Docker Image to GHCR
+    runs-on: ubuntu-latest
+
+    steps:
+      # Bước 1: Checkout toàn bộ source code (bao gồm tags)
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # Bước 2: Đăng nhập vào GitHub Container Registry (GHCR)
+      # Dùng GITHUB_TOKEN sẵn có — không cần tạo secret thủ công
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Bước 3: Trích xuất metadata từ Git Tag
+      # Tự động tạo tag Docker tương ứng: v1.0.0, latest, v1.0, v1
+      - name: Extract Docker metadata from Git Tag
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            # Tag chính xác theo Git Tag: v1.0.0
+            type=semver,pattern={{version}}
+            # Tag minor: v1.0
+            type=semver,pattern={{major}}.{{minor}}
+            # Tag major: v1
+            type=semver,pattern={{major}}
+            # Tag latest luôn được cập nhật
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Bước 4: Thiết lập Docker Buildx (hỗ trợ multi-platform)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Bước 5: Build và Push Docker Image lên GHCR
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache layer để tăng tốc build lần sau
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
